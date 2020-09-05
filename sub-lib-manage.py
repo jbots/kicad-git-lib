@@ -1,0 +1,180 @@
+#!/usr/bin/python3
+from enum import Enum
+from pathlib import Path
+import re
+
+class LibTable:
+    def __init__(self, libs=None):
+        self.libs=[] if libs is None else libs
+
+    @classmethod
+    def from_file(cls, path):
+        c = cls()
+        if path.exists():
+            with open(path, "r") as f:
+                for line in f.readlines():
+                    if line.strip().startswith("(lib "):
+                        c.libs.append(line)
+        else:
+            print (f"Skipping non-existant library file {path}")
+        return c
+
+    @classmethod
+    def from_file_list_with_type(cls, dir_ls, type):
+        "Create LibTable from list of paths"
+        libs=[]
+        line_template = '  (lib (name {name})(type {type})(uri {uri})(options "")(descr ""))\n'
+        for path in dir_ls:
+            uri = "${KIPRJMOD}/" + str(path)
+            line = line_template.format(name=path.stem, type=type, uri=uri)
+            libs.append(line)
+        return cls(libs)
+
+    def combine(self, other):
+        self.libs += other.libs
+
+    def write_file_with_header(self, path, header):
+        with open(path, "w") as f:
+            f.write(header)
+            for lib in self.libs:
+                f.write(lib)
+            f.write(")")
+
+    def replace_var(self, var, replacement):
+        "In lib paths, replace all instances of var with replacement"
+        pattern = re.compile("\${" + var + "}")
+        self.libs = [pattern.sub(replacement, path) for path in self.libs]
+
+class SymLibTable(LibTable):
+    def write_file(self, path="sym-lib-table"):
+        self.write_file_with_header(path, "(sym_lib_table\n")
+
+    @classmethod
+    def from_dir(cls, d):
+        return super().from_file_list_with_type(d.glob("*.lib"), "Legacy")
+
+class FpLibTable(LibTable):
+    def write_file(self, path="fp-lib-table"):
+        self.write_file_with_header(path, "(fp_lib_table\n")
+
+    @classmethod
+    def from_dir(cls, d):
+        return super().from_file_list_with_type(d.glob("*.pretty"), "KiCad")
+
+class LibTableConfig:
+    "Configuration for single lib table"
+    valid_fields = ["type", "path", "table", "pathvar"]
+
+    class InvalidConfigLine(Exception):
+        pass
+
+    def __init__(self, type, path, table, pathvar):
+        self.type = type
+        self.path = Path(path)
+
+        if table is None:
+            if type == "sym":
+                self.table_path = self.path / "sym-lib-table"
+            elif type == "fp":
+                self.table_path = self.path / "fp-lib-table"
+        else:
+            self.table_path = Path(table)
+
+        self.pathvar = pathvar
+
+    @staticmethod
+    def _get_field(text, field):
+        "Return named field from text, or None if not found"
+        regex = fr'\({field} "?([^\)"]*)"?\)'
+        search = re.search(regex, text)
+        if search is not None:
+            return search.groups()[0]
+        return None
+
+    @classmethod
+    def from_file_line(cls, line):
+        "(sublib (type) (path) (table) (pathvar))"
+
+        if line.strip().startswith("(sublib "):
+            entry = {}
+            for field_name in cls.valid_fields:
+                val = cls._get_field(line, field_name)
+                entry[field_name] = val
+
+            if entry["type"] == "sym" or entry["type"] == "fp":
+                return cls (**entry)
+        raise cls.InvalidConfigLine()
+
+class Config:
+    def __init__(self):
+        self.tables = []
+
+    @classmethod
+    def from_file(cls, path):
+        c = cls()
+        with open(path, "r") as f:
+            for line in f.readlines():
+                try:
+                    c.tables.append(LibTableConfig.from_file_line(line))
+                except LibTableConfig.InvalidConfigLine:
+                    continue # Ignore invalid line
+        return c
+
+def process_libs(config_file_path):
+    "Create lib tables from sub lib tables defined in given config file path"
+
+    config = Config.from_file(config_file_path)
+    root = config_file_path.parent
+
+    primary_tables = {"sym":SymLibTable(), "fp":FpLibTable()}
+
+    for conf in config.tables:
+        try:
+            primary = primary_tables[conf.type]
+        except KeyError:
+            print("Invalid lib table type!")
+            continue
+
+        # New classes will be same type as primary
+        cls = primary.__class__
+
+        if str(conf.table_path) == "AUTO":
+            sub_table = cls.from_dir(conf.path)
+
+        else:
+            table_path = root / conf.table_path
+
+            sub_table = cls.from_file(table_path)
+
+            if conf.pathvar is not None:
+                # Replace any instances of path variable with path within project
+                sub_table.replace_var(conf.pathvar, "${KIPRJMOD}/" + str(conf.path))
+
+        primary.combine(sub_table)
+
+    for typ, table in primary_tables.items():
+        table.write_file()
+
+if __name__ == "__main__":
+    from argparse import ArgumentParser
+
+    parser = ArgumentParser(description="Combine Kicad sub-library tables into primary library tables")
+    parser.add_argument("--config", "-c", type=Path, help="Config file describing footprint and symbol sub-libraries")
+    args=parser.parse_args()
+
+    if args.config is not None:
+        config_path = args.config
+        if not config_path.exists():
+            raise Exception(f"Config file {config_path} not found")
+    else:
+        # Walk up 2 directories, starting with current, looking for config
+        script_path = Path(__file__).resolve()
+        for depth in range(2):
+            config_path = script_path.parents[depth] / "sub-lib-config"
+            if config_path.exists():
+                print(f"Found config file at {config_path}")
+                break
+        if not config_path.exists():
+            raise Exception("No config file specified and none found")
+
+    process_libs(config_path)
