@@ -167,9 +167,9 @@ if __name__ == "__main__":
         if not config_path.exists():
             raise Exception(f"Config file {config_path} not found")
     else:
-        # Walk up 2 directories, starting with current, looking for config
+        # Walk up 3 directories, starting with current, looking for config
         script_path = Path(__file__).resolve()
-        for depth in range(2):
+        for depth in range(3):
             config_path = script_path.parents[depth] / "sub-lib-config"
             if config_path.exists():
                 print(f"Found config file at {config_path}")
