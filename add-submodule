@@ -1,0 +1,21 @@
+#!/bin/bash
+
+if [[ $# -ne 2 ]]; then
+    echo "Usage: ${0} lib-git-url lib-path-in-this-repo"
+    exit
+fi
+
+if [[ $1 == git* ]]; then
+    printf "Use HTTPS for submodule URL, then configure local clone to use SSH, eg\n\
+    git config --global url.\"git@github.com:\".insteadOf \"https://github.com/\"\n"
+fi
+
+if [[ -f $2/.git ]]; then
+    printf "\nTarget ${2} already seems to exist, skipping\n\n"
+    exit
+fi
+
+printf "\nAdding shallow checkout of\n  ${1}\nto\n  ${2}\n\n"
+git submodule add --depth 1 -- ${1} ${2} &&\
+git config -f .gitmodules submodule."${2}".shallow true
+
