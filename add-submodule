@@ -18,4 +18,4 @@ fi
 printf "\nAdding shallow checkout of\n  ${1}\nto\n  ${2}\n\n"
 git submodule add --depth 1 -- ${1} ${2} &&\
 git config -f .gitmodules submodule."${2}".shallow true
-
+git add .gitmodules
